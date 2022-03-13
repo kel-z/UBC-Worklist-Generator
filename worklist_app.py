@@ -4,6 +4,7 @@ import os
 
 import requests
 import random
+import asyncio
 
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QColor, QPalette, QIntValidator
 from PyQt5.QtWidgets import QApplication, QHBoxLayout, QVBoxLayout, QComboBox, QLineEdit, \
@@ -17,13 +18,15 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
 import chromedriver_autoinstaller
 
-APP_NAME = 'UBC Worklist Generator 1.0.0'
+import timeit
+
+APP_NAME = 'UBC Worklist Generator 1.1.0'
 
 SAVE_PATH = 'data'
 
 courses_dict = {}
 
-possible_schedules = []
+schedules = []
 
 URL_SECTIONS_TEMPLATE = 'https://courses.students.ubc.ca/cs/courseschedule?pname=subjarea&tname=subj-course&dept={' \
                         '}&course={}'
@@ -41,38 +44,41 @@ START_TIME = 0
 END_TIME = 2400
 
 
-def fits_in_schedule(section, schedule, term, breaks):
+async def fits_in_schedule(section, schedule, term, breaks):
     if section['term'] != term:
         return False
     for scheduled_section in [*schedule, *breaks]:
-        # a necessary evil
         is_conflict = (section['start'] < scheduled_section['end'] and section['end'] > scheduled_section['start']) or \
                       (section['start'] > scheduled_section['start'] and section['end'] < scheduled_section['end'])
 
         if set(scheduled_section['days']).intersection(section['days']) and is_conflict:
             # print(":: fits_in_schedule: Conflict found: " + str(section) + " and " + str(scheduled_section))
             return False
-    return True
+    return section
 
 
-def generate_schedule(schedule, courses_to_schedule, term, breaks):
+async def get_possible_sections(sections, schedule, term, breaks):
+    result = await asyncio.gather(*[fits_in_schedule(section, schedule, term, breaks) for section in sections])
+    return [x for x in result if x]
+
+
+async def generate_schedule(schedule, courses_to_schedule, term, breaks):
     if len(courses_to_schedule) == 0:
         # print(":: generate_schedule: Success: " + str(schedule))
         return sorted(schedule, key=lambda i: i['start'])
     course = courses_to_schedule.pop()
 
-    possible_sections = [x for x in courses_dict[course] if fits_in_schedule(x, schedule, term, breaks)]
+    possible_sections = await get_possible_sections(courses_dict[course], schedule, term, breaks)
     if not possible_sections:
         return False
 
-    for section in possible_sections:
-        possible_schedule = schedule.copy()
-        possible_schedule.append(section)
-        remaining_courses = courses_to_schedule.copy()
-        # print(":: generate_schedule: " + str(section['course']) + " " + str(remaining_courses))
-        possible_schedule = generate_schedule(possible_schedule, remaining_courses, term, breaks)
-        if possible_schedule:
-            possible_schedules.append(possible_schedule)
+    possible_schedules = await asyncio.gather(
+        *[generate_schedule([*schedule, section], courses_to_schedule.copy(), term, breaks)
+          for section in possible_sections])
+
+    for schedule in possible_schedules:
+        if schedule:
+            schedules.append(schedule)
 
     return False
 
@@ -187,13 +193,16 @@ def generate_schedules(schedule, data, term, breaks):
     courses_dict = {}
 
     build_sections_info(data)
-    generate_schedule(schedule, list(courses_dict.keys()), term, breaks)
-    print(':: generate_schedule: Number of possible schedules: ' + str(len(possible_schedules)))
+    start = timeit.default_timer()
+    asyncio.run(generate_schedule(schedule, list(courses_dict.keys()), term, breaks))
+    stop = timeit.default_timer()
+    print('Time: ', stop - start)
+    print(':: generate_schedule: Number of possible schedules: ' + str(len(schedules)))
 
 
 def create_worklists(login, amount):
     session = WorklistSession()
-    return session.login_and_generate_worklists(schedules_to_links(possible_schedules, URL_SAVE_TO_WORKLIST), login,
+    return session.login_and_generate_worklists(schedules_to_links(schedules, URL_SAVE_TO_WORKLIST), login,
                                                 amount)
 
 
@@ -262,7 +271,7 @@ class WorklistAppUi(QWidget):
         self.load()
 
         self.setWindowTitle(APP_NAME)
-        self.resize(800,0)
+        self.resize(800, 0)
 
         self.container = QHBoxLayout()
         self.left_layout = QVBoxLayout()
@@ -460,8 +469,8 @@ def set_start_end(start, end):
 
 
 def run_export_only(data, term, amount, start, end):
-    global possible_schedules
-    possible_schedules = []
+    global schedules
+    schedules = []
     set_start_end(start, end)
 
     to_add_breaks = [{'course': 'break', 'days': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], 'start': 0, 'end': START_TIME},
@@ -477,11 +486,11 @@ def run_export_only(data, term, amount, start, end):
         os.system("notepad.exe export.txt")
         return
 
-    possible_schedules = sorted(possible_schedules, key=lambda i: sum(item['start'] for item in i))
-    links = schedules_to_links(possible_schedules, URL_SECTION_TEMPLATE)
+    schedules = sorted(schedules, key=lambda i: sum(item['start'] for item in i))
+    links = schedules_to_links(schedules, URL_SECTION_TEMPLATE)
     with open('export.txt', 'w') as f:
         f.write(':: Input: ' + str(data) + '\n')
-        if len(possible_schedules) > 0:
+        if len(schedules) > 0:
             f.write('--------------------------------------------------------\n')
             for i in range(min(amount, len(links))):
                 f.write(':: GENERATED WORKLIST ' + str(i + 1) + ':\n')
@@ -496,8 +505,8 @@ def run_export_only(data, term, amount, start, end):
 
 
 def run(login, data, term, amount):
-    global possible_schedules
-    possible_schedules = []
+    global schedules
+    schedules = []
 
     to_add_breaks = [{'course': 'break', 'days': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], 'start': 0, 'end': START_TIME},
                      {'course': 'break', 'days': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], 'start': END_TIME, 'end': 2400}]
@@ -505,8 +514,8 @@ def run(login, data, term, amount):
         generate_schedules([], data, term, to_add_breaks)
     except KeyError as e:
         return 'Error: ' + str(e)
-    possible_schedules = sorted(possible_schedules, key=lambda i: sum(item['start'] for item in i))
-    if len(possible_schedules) > 0:
+    schedules = sorted(schedules, key=lambda i: sum(item['start'] for item in i))
+    if len(schedules) > 0:
         return create_worklists(login, min(10, amount))
     else:
         return 'There are no possible worklists for the courses specified'
