@@ -28,6 +28,9 @@ I initially wrote this application over two days as part of a self-imposed chall
 - [Selenium](https://pypi.org/project/selenium/) to facilitate automatic login and worklist creation
 ## Changelog
 
+v1.1.0:
+- Change to ChromeDriver version 98.0.4758.102 with binary from https://sourceforge.net/projects/portableapps/files/Source/Google%20Chrome/Launcher/
+
 v1.0.0:
 - Initial release.
   
