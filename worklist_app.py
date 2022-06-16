@@ -17,7 +17,11 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
 import chromedriver_autoinstaller
 
-APP_NAME = 'UBC Worklist Generator 1.0.0'
+APP_NAME = 'UBC Worklist Generator 1.1.0'
+
+# version 98.0.4758.102
+BINARY_PATH = ".\\GoogleChromePortable64\\App\\Chrome-bin\\chrome.exe"
+PATH = ".\\chromedriver.exe"
 
 SAVE_PATH = 'data'
 
@@ -108,7 +112,16 @@ def build_sections_info(data):
     for course in data:
         sections_added = 0
 
-        activity_to_check = ['Lecture', 'Discussion', 'Tutorial', 'Laboratory']
+        activity_to_check = {
+            'Lecture',
+            'Discussion',
+            'Tutorial',
+            'Laboratory',
+            'Seminar',
+            'Lecture-Discussion',
+            'Lecture-Laboratory',
+            'Lecture-Seminar'
+        }
         certificate = {}
         for activity in activity_to_check:
             verifier = {
@@ -205,8 +218,10 @@ class WorklistSession(object):
 
     def __init__(self):
         global browser
-        chromedriver_autoinstaller.install()
-        browser = webdriver.Chrome()
+        options = webdriver.ChromeOptions()
+        options.add_experimental_option("excludeSwitches", ["enable-logging"])
+        options.binary_location = BINARY_PATH
+        browser = webdriver.Chrome(PATH, options=options)
         self.browser = browser
 
     def login_and_generate_worklists(self, links, login, amount):
@@ -464,6 +479,7 @@ def run_export_only(data, term, amount, start, end):
     possible_schedules = []
     set_start_end(start, end)
 
+    # future feature
     to_add_breaks = [{'course': 'break', 'days': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], 'start': 0, 'end': START_TIME},
                      {'course': 'break', 'days': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], 'start': END_TIME, 'end': 2400}]
 
@@ -480,7 +496,7 @@ def run_export_only(data, term, amount, start, end):
     possible_schedules = sorted(possible_schedules, key=lambda i: sum(item['start'] for item in i))
     links = schedules_to_links(possible_schedules, URL_SECTION_TEMPLATE)
     with open('export.txt', 'w') as f:
-        f.write(':: Input: ' + str(data) + '\n')
+        f.write(':: Input (TERM {}): {}\n'.format(term, str(data)))
         if len(possible_schedules) > 0:
             f.write('--------------------------------------------------------\n')
             for i in range(min(amount, len(links))):
@@ -499,8 +515,10 @@ def run(login, data, term, amount):
     global possible_schedules
     possible_schedules = []
 
+    # future feature
     to_add_breaks = [{'course': 'break', 'days': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], 'start': 0, 'end': START_TIME},
                      {'course': 'break', 'days': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], 'start': END_TIME, 'end': 2400}]
+
     try:
         generate_schedules([], data, term, to_add_breaks)
     except KeyError as e:
